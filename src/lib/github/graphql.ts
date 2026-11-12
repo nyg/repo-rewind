@@ -18,6 +18,8 @@ const CONCURRENCY = 5
 const MAX_COMMITS_PER_REPO = 2000
 const INITIAL_COMMIT_PAGE = 50
 const MIN_COMMIT_PAGE = 5
+const INITIAL_REPO_PAGE = 50
+const MIN_REPO_PAGE = 10
 
 export type GraphqlTransport = (
   query: string,
@@ -25,7 +27,12 @@ export type GraphqlTransport = (
   signal?: AbortSignal
 ) => Promise<unknown>
 
-export class QueryTimeout extends Error {}
+export class QueryTimeout extends Error {
+  constructor(message = "GitHub took too long to answer.") {
+    super(message)
+    this.name = "QueryTimeout"
+  }
+}
 
 export function createGraphqlTransport(token: string): GraphqlTransport {
   return async (query, variables, signal) => {
@@ -44,7 +51,13 @@ export function createGraphqlTransport(token: string): GraphqlTransport {
       if (signal?.aborted) {
         throw error
       }
-      throw new GitHubError("network", "Could not reach api.github.com.")
+      if (globalThis.navigator?.onLine === false) {
+        throw new GitHubError("network", "Could not reach api.github.com.")
+      }
+      // GitHub answers a query that runs past 10 s with a 502 that has no CORS headers, so the browser only reports a failed fetch.
+      throw new QueryTimeout(
+        "Could not reach api.github.com, or it took too long to answer."
+      )
     }
 
     if (response.status === 401) {
@@ -107,7 +120,7 @@ const VIEWER_QUERY = /* GraphQL */ `
 `
 
 const OWNER_QUERY = /* GraphQL */ `
-  query Owner($login: String!, $cursor: String) {
+  query Owner($login: String!, $first: Int!, $cursor: String) {
     viewer {
       login
     }
@@ -128,7 +141,7 @@ const OWNER_QUERY = /* GraphQL */ `
         name
       }
       repositories(
-        first: 100
+        first: $first
         after: $cursor
         ownerAffiliations: [OWNER]
         orderBy: { field: PUSHED_AT, direction: DESC }
@@ -429,23 +442,36 @@ async function fetchOwner(
   signal?: AbortSignal
 ) {
   const nodes: RepoNode[] = []
+  let pageSize = INITIAL_REPO_PAGE
   let cursor: string | null = null
   let first: OwnerData | null = null
 
-  do {
-    const data = (await transport(
-      OWNER_QUERY,
-      { login, cursor },
-      signal
-    )) as OwnerData
+  for (;;) {
+    let data: OwnerData
+    try {
+      data = (await transport(
+        OWNER_QUERY,
+        { login, first: pageSize, cursor },
+        signal
+      )) as OwnerData
+    } catch (error) {
+      if (error instanceof QueryTimeout && pageSize > MIN_REPO_PAGE) {
+        pageSize = Math.max(MIN_REPO_PAGE, Math.floor(pageSize / 2))
+        continue
+      }
+      throw error
+    }
     if (!data.repositoryOwner) {
       throw new GitHubError("not-found", `No GitHub account named “${login}”.`)
     }
     first ??= data
     nodes.push(...data.repositoryOwner.repositories.nodes)
     const pageInfo: PageInfo = data.repositoryOwner.repositories.pageInfo
-    cursor = pageInfo.hasNextPage ? pageInfo.endCursor : null
-  } while (cursor)
+    if (!pageInfo.hasNextPage || !pageInfo.endCursor) {
+      break
+    }
+    cursor = pageInfo.endCursor
+  }
 
   const account = first!.repositoryOwner!
   const owner: Owner = {
