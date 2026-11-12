@@ -41,7 +41,7 @@ export function AppHeader({
     <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-2.5 px-4 sm:px-6">
         <Logo className="size-6" />
-        <span className="font-semibold tracking-tight">Repo Activity</span>
+        <span className="font-semibold tracking-tight">Repo Rewind</span>
 
         <div className="ml-auto flex items-center gap-1">
           <span

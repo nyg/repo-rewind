@@ -1,4 +1,4 @@
-# Repo Activity
+# Repo Rewind
 
 A dashboard that ranks your GitHub repositories by how active they are, and lets you drag a date slider to see what you were working on at any point in the last year.
 

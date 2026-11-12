@@ -2,8 +2,8 @@ import { HALF_LIVES, type HalfLife } from "./activity"
 import { DATASET_VERSION } from "./github/graphql"
 import { ACTORS, type Actor, type Dataset } from "./github/types"
 
-const SETTINGS_KEY = "repo-activity:settings"
-const DATASET_PREFIX = "repo-activity:dataset:"
+const SETTINGS_KEY = "repo-rewind:settings"
+const DATASET_PREFIX = "repo-rewind:dataset:"
 
 export interface Settings {
   token: string

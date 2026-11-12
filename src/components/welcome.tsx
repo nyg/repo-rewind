@@ -29,7 +29,7 @@ export function Welcome({
     <div className="flex min-h-svh flex-col">
       <header className="mx-auto flex h-14 w-full max-w-6xl items-center gap-2.5 px-4 sm:px-6">
         <Logo className="size-6" />
-        <span className="font-semibold tracking-tight">Repo Activity</span>
+        <span className="font-semibold tracking-tight">Repo Rewind</span>
         <div className="ml-auto">
           <ThemeToggle />
         </div>
