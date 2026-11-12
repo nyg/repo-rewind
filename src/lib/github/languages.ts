@@ -1,0 +1,36 @@
+const COLORS: Record<string, string> = {
+  C: "#555555",
+  "C#": "#178600",
+  "C++": "#f34b7d",
+  CSS: "#663399",
+  Dart: "#00B4AB",
+  Dockerfile: "#384d54",
+  Elixir: "#6e4a7e",
+  Go: "#00ADD8",
+  HCL: "#844FBA",
+  HTML: "#e34c26",
+  Haskell: "#5e5086",
+  Java: "#b07219",
+  JavaScript: "#f1e05a",
+  "Jupyter Notebook": "#DA5B0B",
+  Kotlin: "#A97BFF",
+  Lua: "#000080",
+  MDX: "#fcb32c",
+  Nix: "#7e7eff",
+  PHP: "#4F5D95",
+  Python: "#3572A5",
+  Ruby: "#701516",
+  Rust: "#dea584",
+  SCSS: "#c6538c",
+  Scala: "#c22d40",
+  Shell: "#89e051",
+  Svelte: "#ff3e00",
+  Swift: "#F05138",
+  TypeScript: "#3178c6",
+  Vue: "#41b883",
+  Zig: "#ec915c",
+}
+
+export function languageColor(name: string): string | null {
+  return COLORS[name] ?? null
+}
