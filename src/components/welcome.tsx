@@ -1,6 +1,7 @@
 import { ConnectForm, type ConnectionInput } from "@/components/connect-form"
 import { Logo } from "@/components/logo"
 import { ThemeToggle } from "@/components/theme-toggle"
+import type { SignIn } from "@/hooks/use-sign-in"
 
 const PREVIEW_ROWS = [
   { name: "storefront", share: 1, seed: 7 },
@@ -21,8 +22,10 @@ function previewBars(seed: number, share: number) {
 }
 
 export function Welcome({
+  signIn,
   onConnect,
 }: {
+  signIn: SignIn
   onConnect: (connection: ConnectionInput) => void
 }) {
   return (
@@ -51,6 +54,7 @@ export function Welcome({
             <ConnectForm
               initial={{ login: "", token: "" }}
               submitLabel="Show activity"
+              signIn={signIn}
               onSubmit={onConnect}
             />
           </div>

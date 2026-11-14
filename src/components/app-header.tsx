@@ -12,7 +12,9 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { useNow } from "@/hooks/use-now"
+import type { SignIn } from "@/hooks/use-sign-in"
 import { formatClock, formatElapsed } from "@/lib/format"
+import { isSignInToken } from "@/lib/github/auth"
 import type { Dataset, LoadProgress } from "@/lib/github/types"
 
 interface AppHeaderProps {
@@ -20,6 +22,7 @@ interface AppHeaderProps {
   connection: ConnectionInput
   loading: boolean
   progress: LoadProgress | null
+  signIn: SignIn
   onRefresh: () => void
   onConnect: (connection: ConnectionInput) => void
   onDisconnect: () => void
@@ -30,6 +33,7 @@ export function AppHeader({
   connection,
   loading,
   progress,
+  signIn,
   onRefresh,
   onConnect,
   onDisconnect,
@@ -67,6 +71,7 @@ export function AppHeader({
           <AccountMenu
             dataset={dataset}
             connection={connection}
+            signIn={signIn}
             onConnect={onConnect}
             onDisconnect={onDisconnect}
           />
@@ -107,14 +112,27 @@ function LoadStatus({
   )
 }
 
+function describeConnection(token: string, canSignIn: boolean) {
+  if (isSignInToken(token)) {
+    return "Signed in with GitHub: every public repository, with line counts. Use a token instead to include private repositories."
+  }
+  if (token) {
+    return "Using your access token: private repositories and line counts included."
+  }
+  return canSignIn
+    ? "Public data only. Sign in or add a token for the full picture."
+    : "Public data only. Add a token for the full picture."
+}
+
 function AccountMenu({
   dataset,
   connection,
+  signIn,
   onConnect,
   onDisconnect,
 }: Pick<
   AppHeaderProps,
-  "dataset" | "connection" | "onConnect" | "onDisconnect"
+  "dataset" | "connection" | "signIn" | "onConnect" | "onDisconnect"
 >) {
   const [open, setOpen] = useState(false)
   const login = dataset?.owner.login ?? connection.login
@@ -136,15 +154,14 @@ function AccountMenu({
         <div>
           <p className="font-medium">Connection</p>
           <p className="text-sm text-muted-foreground">
-            {connection.token
-              ? "Using your access token: private repositories and line counts included."
-              : "Public data only. Add a token for the full picture."}
+            {describeConnection(connection.token, signIn.available)}
           </p>
         </div>
         <ConnectForm
           key={`${connection.login}|${connection.token}`}
           initial={connection}
           submitLabel="Apply"
+          signIn={signIn}
           onSubmit={(next) => {
             setOpen(false)
             onConnect(next)
@@ -155,7 +172,8 @@ function AccountMenu({
           className="text-muted-foreground"
           onClick={onDisconnect}
         >
-          Disconnect and clear cached data
+          {isSignInToken(connection.token) ? "Sign out" : "Disconnect"} and
+          clear cached data
         </Button>
       </PopoverContent>
     </Popover>
