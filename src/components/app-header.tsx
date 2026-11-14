@@ -13,9 +13,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { useNow } from "@/hooks/use-now"
-import type { SignIn } from "@/hooks/use-sign-in"
+import type { SignIn, SignInAccess } from "@/hooks/use-sign-in"
 import { formatClock, formatElapsed } from "@/lib/format"
-import { isSignInToken } from "@/lib/github/auth"
 import type { Dataset, LoadProgress } from "@/lib/github/types"
 
 interface AppHeaderProps {
@@ -114,14 +113,22 @@ function LoadStatus({
   )
 }
 
-function describeConnection(token: string, canSignIn: boolean) {
-  if (isSignInToken(token)) {
-    return "Signed in with GitHub: every public repository, with line counts. Use a token instead to include private repositories."
-  }
+const TOKEN_CONNECTION =
+  "Using your access token: private repositories and line counts included."
+
+const SIGNED_IN_CONNECTION: Record<SignInAccess, string | null> = {
+  none: null,
+  public:
+    "Signed in with GitHub: every public repository, with line counts. Private repositories are left out.",
+  private:
+    "Signed in with GitHub: private repositories and line counts included.",
+}
+
+function describeConnection(token: string, signIn: SignIn) {
   if (token) {
-    return "Using your access token: private repositories and line counts included."
+    return SIGNED_IN_CONNECTION[signIn.access] ?? TOKEN_CONNECTION
   }
-  return canSignIn
+  return signIn.available
     ? "Public data only. Sign in or add a token for the full picture."
     : "Public data only. Add a token for the full picture."
 }
@@ -156,7 +163,7 @@ function AccountMenu({
         <div>
           <p className="font-medium">Connection</p>
           <p className="text-sm text-muted-foreground">
-            {describeConnection(connection.token, signIn.available)}
+            {describeConnection(connection.token, signIn)}
           </p>
         </div>
         <ConnectForm
@@ -174,8 +181,8 @@ function AccountMenu({
           className="text-muted-foreground"
           onClick={onDisconnect}
         >
-          {isSignInToken(connection.token) ? "Sign out" : "Disconnect"} and
-          clear cached data
+          {signIn.access === "none" ? "Disconnect" : "Sign out"} and clear
+          cached data
         </Button>
       </PopoverContent>
     </Popover>

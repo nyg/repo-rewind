@@ -31,7 +31,6 @@ import {
   weeklyOverview,
 } from "@/lib/activity"
 import { formatClock } from "@/lib/format"
-import { isSignInToken } from "@/lib/github/auth"
 import { PUBLIC_REPO_LIMIT } from "@/lib/github/rest"
 import { GitHubError, type Dataset } from "@/lib/github/types"
 import type { Settings } from "@/lib/storage"
@@ -163,7 +162,7 @@ export function Dashboard({
         {error && (
           <LoadError
             error={error}
-            signedIn={isSignInToken(settings.token)}
+            signedIn={signIn.access !== "none"}
             onRetry={refresh}
           />
         )}
@@ -260,7 +259,7 @@ function PublicNotice({
         without line counts
         {skipped > 0 ? `; ${skipped} more were not loaded` : ""}.{" "}
         {canSignIn
-          ? "Sign in with GitHub from the account menu for the full list and line counts, or add an access token to include private repositories too."
+          ? "Sign in with GitHub or add an access token from the account menu to see everything, private repositories included."
           : "Add an access token from the account menu to see everything, private repositories included."}
       </AlertDescription>
     </Alert>
@@ -291,15 +290,7 @@ function SignInFailure({ signIn }: { signIn: SignIn }) {
       <TriangleAlertIcon />
       <AlertTitle>Could not sign in with GitHub</AlertTitle>
       <AlertDescription>
-        <p>{signIn.error}</p>
-        <Button
-          variant="outline"
-          size="sm"
-          className="mt-2"
-          onClick={signIn.begin}
-        >
-          Try again
-        </Button>
+        {signIn.error} You can sign in again from the account menu.
       </AlertDescription>
     </Alert>
   )

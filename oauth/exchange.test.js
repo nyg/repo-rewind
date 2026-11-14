@@ -40,7 +40,32 @@ describe("exchange", () => {
 
     // Then
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ access_token: "gho_token" })
+    expect(await response.json()).toEqual({
+      access_token: "gho_token",
+      scope: "",
+    })
+  })
+
+  it("returns the scope GitHub grants", async () => {
+    // Given
+    const fetchFn = githubAnswers({ access_token: "gho_token", scope: "repo" })
+
+    // When
+    const response = await exchange(request(), env, fetchFn)
+
+    // Then
+    expect(await response.json()).toHaveProperty("scope", "repo")
+  })
+
+  it("reports no scope when GitHub names none", async () => {
+    // Given
+    const fetchFn = githubAnswers({ access_token: "gho_token" })
+
+    // When
+    const response = await exchange(request(), env, fetchFn)
+
+    // Then
+    expect(await response.json()).toHaveProperty("scope", "")
   })
 
   it("sends the code, the verifier and the secret to GitHub", async () => {
