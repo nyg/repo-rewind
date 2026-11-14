@@ -39,7 +39,7 @@ Without a token the app reads public data only: the 12 most recently pushed publ
 
 With a token it uses the GraphQL API and shows everything, private repositories included. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with read-only access to **Contents**, **Metadata** and **Pull requests** for all repositories, then paste it in the account menu.
 
-Signing in with GitHub, when it is [set up](#sign-in-with-github), also uses the GraphQL API. It asks for no permissions, so it shows every public repository with line counts, but no private ones.
+Signing in with GitHub, when it is [set up](#sign-in-with-github), also uses the GraphQL API. By default it asks for no permissions and shows every public repository with line counts, but no private ones. The visitor can turn on **Include private repositories** before signing in. GitHub has no read-only OAuth scope for private repositories, so this asks for the `repo` scope, which grants read and write access, although the app only reads. Private repositories of an organization also need that organization to approve the OAuth App.
 
 Either way the access token is stored in this browser's `localStorage` and is only sent to `api.github.com`. The production build ships a Content Security Policy that blocks requests to any other host, apart from the sign-in service.
 
@@ -55,7 +55,7 @@ GitHub will not hand a token to a browser directly: the last step of its OAuth f
 
 On GitHub, go to **Settings → Developer settings → OAuth Apps → New OAuth App**. Set both **Homepage URL** and **Authorization callback URL** to the address of the deployed site, for example `https://octocat.github.io/repo-rewind/`.
 
-Note the **Client ID** and generate a **client secret**. The app asks for no scopes, so a signed-in visitor grants read access to public data only.
+Note the **Client ID** and generate a **client secret**. The app asks for no scopes unless the visitor chooses to include private repositories, so by default a signed-in visitor grants read access to public data only.
 
 ### 2. Deploy the function
 
