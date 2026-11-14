@@ -1,5 +1,5 @@
 import { classifyActor } from "./classify"
-import { runPool } from "./pool"
+import { limitConcurrency } from "./pool"
 import {
   GitHubError,
   type CommitEvent,
@@ -14,12 +14,15 @@ import {
 export const DATASET_VERSION = 1
 
 const ENDPOINT = "https://api.github.com/graphql"
-const CONCURRENCY = 5
+const MAX_CONCURRENT_REQUESTS = 12
 const MAX_COMMITS_PER_REPO = 2000
 const INITIAL_COMMIT_PAGE = 50
 const MIN_COMMIT_PAGE = 5
-const INITIAL_REPO_PAGE = 50
+const INITIAL_REPO_PAGE = 100
 const MIN_REPO_PAGE = 10
+
+// History cursors are "<head commit oid> <offset>", which lets the pages after the first load side by side.
+const HISTORY_CURSOR = /^([0-9a-f]+) (\d+)$/
 
 export type GraphqlTransport = (
   query: string,
@@ -119,6 +122,15 @@ const VIEWER_QUERY = /* GraphQL */ `
   }
 `
 
+const REPOSITORIES = /* GraphQL */ `
+  repositories(
+    first: $first
+    after: $cursor
+    ownerAffiliations: [OWNER]
+    orderBy: { field: PUSHED_AT, direction: DESC }
+  )
+`
+
 const OWNER_QUERY = /* GraphQL */ `
   query Owner($login: String!, $first: Int!, $cursor: String) {
     viewer {
@@ -140,12 +152,7 @@ const OWNER_QUERY = /* GraphQL */ `
       ... on Organization {
         name
       }
-      repositories(
-        first: $first
-        after: $cursor
-        ownerAffiliations: [OWNER]
-        orderBy: { field: PUSHED_AT, direction: DESC }
-      ) {
+      ${REPOSITORIES} {
         pageInfo {
           hasNextPage
           endCursor
@@ -170,6 +177,23 @@ const OWNER_QUERY = /* GraphQL */ `
               oid
             }
           }
+        }
+      }
+    }
+  }
+`
+
+// Counting pull requests roughly doubles the time a page of repositories takes, so the counts load next to the list.
+const PULL_COUNTS_QUERY = /* GraphQL */ `
+  query PullCounts($login: String!, $first: Int!, $cursor: String) {
+    repositoryOwner(login: $login) {
+      ${REPOSITORIES} {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
           pullRequests {
             totalCount
           }
@@ -201,6 +225,7 @@ const COMMITS_QUERY = /* GraphQL */ `
               since: $since
               author: $author
             ) {
+              totalCount
               pageInfo {
                 hasNextPage
                 endCursor
@@ -276,7 +301,20 @@ interface RepoNode {
   openPullRequests: { totalCount: number } | null
 }
 
-interface OwnerData {
+type ListedRepo = Omit<RepoNode, "pullRequests" | "openPullRequests">
+
+type PullCounts = Pick<RepoNode, "id" | "pullRequests" | "openPullRequests">
+
+interface Repositories<Node> {
+  pageInfo: PageInfo
+  nodes: Node[]
+}
+
+interface RepositoriesData<Node> {
+  repositoryOwner: { repositories: Repositories<Node> } | null
+}
+
+interface OwnerData extends RepositoriesData<ListedRepo> {
   viewer: { login: string }
   rateLimit: { remaining: number; resetAt: string } | null
   repositoryOwner: {
@@ -286,7 +324,18 @@ interface OwnerData {
     avatarUrl: string
     url: string
     name?: string | null
-    repositories: { pageInfo: PageInfo; nodes: RepoNode[] }
+    repositories: Repositories<ListedRepo>
+  } | null
+}
+
+interface CommitNode {
+  committedDate: string
+  additions: number
+  deletions: number
+  parents: { totalCount: number }
+  author: {
+    name: string | null
+    user: { login: string } | null
   } | null
 }
 
@@ -295,17 +344,9 @@ interface CommitsData {
     defaultBranchRef: {
       target: {
         history?: {
+          totalCount: number
           pageInfo: PageInfo
-          nodes: {
-            committedDate: string
-            additions: number
-            deletions: number
-            parents: { totalCount: number }
-            author: {
-              name: string | null
-              user: { login: string } | null
-            } | null
-          }[]
+          nodes: CommitNode[]
         }
       } | null
     } | null
@@ -343,10 +384,26 @@ interface RepoPlan {
   authorId: string | null
 }
 
+interface CommitPage {
+  commits: CommitEvent[]
+  totalCount: number
+  pageInfo: PageInfo
+}
+
+type CommitPageLoader = (
+  after: string | null,
+  first: number
+) => Promise<CommitPage | null>
+
 export async function loadWithToken(
   options: TokenLoadOptions
 ): Promise<Dataset> {
-  const { transport, since, cached, signal } = options
+  const { since, cached, signal } = options
+  const transport = limitConcurrency(
+    options.transport,
+    MAX_CONCURRENT_REQUESTS,
+    isFatal
+  )
   const login = options.login ?? (await fetchViewerLogin(transport, signal))
   const { owner, ownerId, viewerLogin, nodes, rateLimit } = await fetchOwner(
     transport,
@@ -390,10 +447,8 @@ export async function loadWithToken(
   options.onProgress?.({ done, total: pending.length, current: null })
   options.onUpdate?.(snapshot(dataset))
 
-  await runPool(
-    pending,
-    CONCURRENCY,
-    async ({ repo, index }) => {
+  const outcomes = await Promise.allSettled(
+    pending.map(async ({ repo, index }) => {
       const node = nodes[index]
       const plan: RepoPlan = {
         node,
@@ -415,9 +470,12 @@ export async function loadWithToken(
         current: repo.nameWithOwner,
       })
       options.onUpdate?.(snapshot(dataset))
-    },
-    signal
+    })
   )
+  const failure = outcomes.find((outcome) => outcome.status === "rejected")
+  if (failure) {
+    throw failure.reason
+  }
 
   return snapshot({ ...dataset, fetchedAt: Date.now() })
 }
@@ -441,19 +499,69 @@ async function fetchOwner(
   login: string,
   signal?: AbortSignal
 ) {
-  const nodes: RepoNode[] = []
+  const [listed, counted] = await Promise.all([
+    fetchRepositories<ListedRepo, OwnerData>(
+      transport,
+      OWNER_QUERY,
+      login,
+      signal
+    ),
+    fetchRepositories<PullCounts>(transport, PULL_COUNTS_QUERY, login, signal),
+  ])
+  const counts = new Map(counted.nodes.map((node) => [node.id, node]))
+  const nodes: RepoNode[] = listed.nodes.map((node) => ({
+    ...node,
+    pullRequests: counts.get(node.id)?.pullRequests ?? null,
+    openPullRequests: counts.get(node.id)?.openPullRequests ?? null,
+  }))
+
+  const { first } = listed
+  const account = first.repositoryOwner!
+  const owner: Owner = {
+    login: account.login,
+    name: account.name ?? null,
+    avatarUrl: account.avatarUrl,
+    url: account.url,
+    isOrganization: account.__typename === "Organization",
+  }
+  const rateLimit: RateLimit | null = first.rateLimit
+    ? {
+        remaining: first.rateLimit.remaining,
+        resetAt: Date.parse(first.rateLimit.resetAt),
+      }
+    : null
+
+  return {
+    owner,
+    ownerId: account.id,
+    viewerLogin: first.viewer.login,
+    nodes,
+    rateLimit,
+  }
+}
+
+async function fetchRepositories<
+  Node,
+  Data extends RepositoriesData<Node> = RepositoriesData<Node>,
+>(
+  transport: GraphqlTransport,
+  query: string,
+  login: string,
+  signal?: AbortSignal
+) {
+  const nodes: Node[] = []
   let pageSize = INITIAL_REPO_PAGE
   let cursor: string | null = null
-  let first: OwnerData | null = null
+  let first: Data | null = null
 
   for (;;) {
-    let data: OwnerData
+    let data: Data
     try {
       data = (await transport(
-        OWNER_QUERY,
+        query,
         { login, first: pageSize, cursor },
         signal
-      )) as OwnerData
+      )) as Data
     } catch (error) {
       if (error instanceof QueryTimeout && pageSize > MIN_REPO_PAGE) {
         pageSize = Math.max(MIN_REPO_PAGE, Math.floor(pageSize / 2))
@@ -468,32 +576,9 @@ async function fetchOwner(
     nodes.push(...data.repositoryOwner.repositories.nodes)
     const pageInfo: PageInfo = data.repositoryOwner.repositories.pageInfo
     if (!pageInfo.hasNextPage || !pageInfo.endCursor) {
-      break
+      return { first, nodes }
     }
     cursor = pageInfo.endCursor
-  }
-
-  const account = first!.repositoryOwner!
-  const owner: Owner = {
-    login: account.login,
-    name: account.name ?? null,
-    avatarUrl: account.avatarUrl,
-    url: account.url,
-    isOrganization: account.__typename === "Organization",
-  }
-  const rateLimit: RateLimit | null = first!.rateLimit
-    ? {
-        remaining: first!.rateLimit.remaining,
-        resetAt: Date.parse(first!.rateLimit.resetAt),
-      }
-    : null
-
-  return {
-    owner,
-    ownerId: account.id,
-    viewerLogin: first!.viewer.login,
-    nodes,
-    rateLimit,
   }
 }
 
@@ -571,11 +656,13 @@ async function loadRepoEvents(
   try {
     const [history, pulls] = await Promise.all([
       plan.node.defaultBranchRef?.target
-        ? fetchCommits(transport, plan, since, selfLogins, signal)
+        ? fetchCommits(
+            commitPageLoader(transport, plan, since, selfLogins, signal)
+          )
         : { commits: [], truncated: false },
-      plan.node.pullRequests?.totalCount
-        ? fetchPulls(transport, plan, since, selfLogins, signal)
-        : [],
+      plan.node.pullRequests?.totalCount === 0
+        ? []
+        : fetchPulls(transport, plan, since, selfLogins, signal),
     ])
     return {
       ...repo,
@@ -606,33 +693,58 @@ function describe(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error"
 }
 
-async function fetchCommits(
+function commitPageLoader(
   transport: GraphqlTransport,
   plan: RepoPlan,
   since: number,
   selfLogins: string[],
   signal?: AbortSignal
-) {
+): CommitPageLoader {
+  const variables = {
+    owner: plan.ownerLogin,
+    name: plan.node.name,
+    since: new Date(since).toISOString(),
+    author: plan.authorId ? { id: plan.authorId } : null,
+  }
+  return async (after, first) => {
+    const data = (await transport(
+      COMMITS_QUERY,
+      { ...variables, first, after },
+      signal
+    )) as CommitsData
+    const history = data.repository?.defaultBranchRef?.target?.history
+    return history
+      ? {
+          commits: history.nodes.map((node) => toCommit(node, selfLogins)),
+          totalCount: history.totalCount,
+          pageInfo: history.pageInfo,
+        }
+      : null
+  }
+}
+
+function toCommit(node: CommitNode, selfLogins: string[]): CommitEvent {
+  const isMerge = node.parents.totalCount > 1
+  return {
+    at: Date.parse(node.committedDate),
+    additions: isMerge ? 0 : node.additions,
+    deletions: isMerge ? 0 : node.deletions,
+    actor: classifyActor(
+      { login: node.author?.user?.login ?? null, name: node.author?.name },
+      selfLogins
+    ),
+  }
+}
+
+async function fetchCommits(loadPage: CommitPageLoader) {
   const commits: CommitEvent[] = []
   let pageSize = INITIAL_COMMIT_PAGE
   let after: string | null = null
-  let truncated = false
 
   for (;;) {
-    let data: CommitsData
+    let page: CommitPage | null
     try {
-      data = (await transport(
-        COMMITS_QUERY,
-        {
-          owner: plan.ownerLogin,
-          name: plan.node.name,
-          since: new Date(since).toISOString(),
-          first: pageSize,
-          after,
-          author: plan.authorId ? { id: plan.authorId } : null,
-        },
-        signal
-      )) as CommitsData
+      page = await loadPage(after, pageSize)
     } catch (error) {
       if (error instanceof QueryTimeout && pageSize > MIN_COMMIT_PAGE) {
         pageSize = Math.max(MIN_COMMIT_PAGE, Math.floor(pageSize / 2))
@@ -640,37 +752,77 @@ async function fetchCommits(
       }
       throw error
     }
-
-    const history = data.repository?.defaultBranchRef?.target?.history
-    if (!history) {
-      break
+    if (!page) {
+      return { commits, truncated: false }
     }
-    for (const node of history.nodes) {
-      const isMerge = node.parents.totalCount > 1
-      commits.push({
-        at: Date.parse(node.committedDate),
-        additions: isMerge ? 0 : node.additions,
-        deletions: isMerge ? 0 : node.deletions,
-        actor: classifyActor(
-          {
-            login: node.author?.user?.login ?? null,
-            name: node.author?.name,
-          },
-          selfLogins
-        ),
-      })
-    }
-    if (!history.pageInfo.hasNextPage) {
-      break
+    commits.push(...page.commits)
+    if (!page.pageInfo.hasNextPage) {
+      return { commits, truncated: false }
     }
     if (commits.length >= MAX_COMMITS_PER_REPO) {
-      truncated = true
-      break
+      return { commits, truncated: true }
     }
-    after = history.pageInfo.endCursor
-  }
 
-  return { commits, truncated }
+    const head = historyHead(page.pageInfo.endCursor, commits.length)
+    if (head) {
+      const end = Math.min(page.totalCount, MAX_COMMITS_PER_REPO)
+      const rest = await fetchCommitRanges(
+        loadPage,
+        head,
+        commits.length,
+        end,
+        pageSize
+      )
+      return { commits: commits.concat(rest), truncated: page.totalCount > end }
+    }
+    after = page.pageInfo.endCursor
+  }
+}
+
+function historyHead(cursor: string | null, fetched: number) {
+  const [, head, offset] = HISTORY_CURSOR.exec(cursor ?? "") ?? []
+  return Number(offset) === fetched - 1 ? head : null
+}
+
+async function fetchCommitRanges(
+  loadPage: CommitPageLoader,
+  head: string,
+  start: number,
+  end: number,
+  pageSize: number
+) {
+  const starts = Array.from(
+    { length: Math.ceil((end - start) / pageSize) },
+    (_, index) => start + index * pageSize
+  )
+  const ranges = await Promise.all(
+    starts.map((from) =>
+      fetchCommitRange(loadPage, head, from, Math.min(end, from + pageSize))
+    )
+  )
+  return ranges.flat()
+}
+
+async function fetchCommitRange(
+  loadPage: CommitPageLoader,
+  head: string,
+  start: number,
+  end: number
+): Promise<CommitEvent[]> {
+  try {
+    const page = await loadPage(`${head} ${start - 1}`, end - start)
+    return page?.commits ?? []
+  } catch (error) {
+    if (!(error instanceof QueryTimeout) || end - start <= MIN_COMMIT_PAGE) {
+      throw error
+    }
+    const middle = start + Math.ceil((end - start) / 2)
+    const halves = await Promise.all([
+      fetchCommitRange(loadPage, head, start, middle),
+      fetchCommitRange(loadPage, head, middle, end),
+    ])
+    return halves.flat()
+  }
 }
 
 async function fetchPulls(
