@@ -63,7 +63,8 @@ export async function exchange(request, env, fetchFn = fetch) {
       cors
     )
   }
-  return json(200, { access_token: grant.access_token }, cors)
+  const scope = typeof grant.scope === "string" ? grant.scope : ""
+  return json(200, { access_token: grant.access_token, scope }, cors)
 }
 
 function json(status, body, headers = {}) {
