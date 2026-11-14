@@ -12,7 +12,10 @@ export function App() {
   const [settings, updateSettings] = useSettings()
   const [now] = useState(() => Date.now())
   const connected = settings.token !== "" || settings.login !== ""
-  const signIn = useSignIn((token) => updateSettings({ token }))
+  const signIn = useSignIn(settings, (access) => {
+    clearDatasets()
+    updateSettings(access)
+  })
 
   const connect = useCallback(
     (connection: ConnectionInput) => updateSettings(connection),
@@ -20,7 +23,7 @@ export function App() {
   )
   const disconnect = useCallback(() => {
     clearDatasets()
-    updateSettings({ token: "", login: "" })
+    updateSettings({ token: "", privateAccess: false, login: "" })
   }, [updateSettings])
 
   return (

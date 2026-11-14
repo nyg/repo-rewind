@@ -7,6 +7,7 @@ const DATASET_PREFIX = "repo-rewind:dataset:"
 
 export interface Settings {
   token: string
+  privateAccess: boolean
   login: string
   halfLife: HalfLife
   actors: Actor[]
@@ -14,6 +15,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   token: "",
+  privateAccess: false,
   login: "",
   halfLife: 14,
   actors: ["you", "agent"],
@@ -26,6 +28,7 @@ export function readSettings(): Settings {
     : []
   return {
     token: typeof stored.token === "string" ? stored.token : "",
+    privateAccess: stored.privateAccess === true,
     login: typeof stored.login === "string" ? stored.login : "",
     halfLife: HALF_LIVES.includes(stored.halfLife as HalfLife)
       ? (stored.halfLife as HalfLife)

@@ -4,8 +4,8 @@ import { GitHubMark } from "@/components/github-mark"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import type { SignIn } from "@/hooks/use-sign-in"
-import { isSignInToken } from "@/lib/github/auth"
 
 const NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new"
 
@@ -32,7 +32,8 @@ export function ConnectForm({
   const loginId = useId()
   const tokenId = useId()
   const ready = login.trim() !== "" || token.trim() !== ""
-  const offersSignIn = signIn.available && !isSignInToken(initial.token)
+  const offersSignIn = signIn.available && signIn.access !== "private"
+  const signInFirst = offersSignIn && signIn.access === "none"
 
   return (
     <form
@@ -93,7 +94,7 @@ export function ConnectForm({
       </div>
       <Button
         type="submit"
-        variant={offersSignIn ? "outline" : "default"}
+        variant={signInFirst ? "outline" : "default"}
         disabled={!ready}
       >
         {submitLabel}
@@ -102,22 +103,53 @@ export function ConnectForm({
   )
 }
 
+const PUBLIC_ACCESS_NOTE =
+  "Asks for no permissions: you get every public repository, with line counts."
+const PRIVATE_ACCESS_NOTE =
+  "GitHub has no read-only permission for private repositories: it will ask for full access to your repositories, read and write. Repo Rewind only reads them, and the access token stays in this browser."
+
 function SignInOption({ signIn }: { signIn: SignIn }) {
+  const signedIn = signIn.access === "public"
+  const [wantsPrivate, setWantsPrivate] = useState(false)
+  const privateAccess = signedIn || wantsPrivate
+  const switchId = useId()
+
   return (
     <>
-      <div className="grid gap-1.5">
-        <Button type="button" disabled={signIn.pending} onClick={signIn.begin}>
+      <div className="grid gap-2.5">
+        <Button
+          type="button"
+          variant={signedIn ? "outline" : "default"}
+          disabled={signIn.pending}
+          onClick={() => signIn.begin(privateAccess)}
+        >
           <GitHubMark />
-          {signIn.pending ? "Signing in…" : "Sign in with GitHub"}
+          {signIn.pending
+            ? "Signing in…"
+            : signedIn
+              ? "Add private repositories"
+              : "Sign in with GitHub"}
         </Button>
         {signIn.error && (
           <p role="alert" className="text-xs text-destructive">
             {signIn.error}
           </p>
         )}
+        {!signedIn && (
+          <div className="flex items-center gap-2">
+            <Switch
+              id={switchId}
+              size="sm"
+              checked={wantsPrivate}
+              onCheckedChange={setWantsPrivate}
+            />
+            <Label htmlFor={switchId} className="font-normal">
+              Include private repositories
+            </Label>
+          </div>
+        )}
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Asks for no permissions: you get every public repository, with line
-          counts. Private repositories need a token.
+          {privateAccess ? PRIVATE_ACCESS_NOTE : PUBLIC_ACCESS_NOTE}
         </p>
       </div>
       <p className="flex items-center gap-3 text-xs text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">

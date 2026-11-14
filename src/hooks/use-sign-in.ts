@@ -4,25 +4,30 @@ import {
   buildAuthorizeUrl,
   codeChallenge,
   exchangeCode,
+  isSignInToken,
   parseCallback,
   randomToken,
   readAuthConfig,
   savePending,
   SignInError,
   takePending,
+  type Access,
   type AuthConfig,
 } from "@/lib/github/auth"
 
 const authConfig = readAuthConfig(import.meta.env)
 
+export type SignInAccess = "none" | "public" | "private"
+
 export interface SignIn {
   available: boolean
+  access: SignInAccess
   pending: boolean
   error: string | null
-  begin: () => void
+  begin: (privateAccess: boolean) => void
 }
 
-type Outcome = { token: string } | { error: string } | null
+type Outcome = { access: Access } | { error: string } | null
 
 // The sign-in code works once, so StrictMode's second mount must reuse the first exchange.
 let completion: Promise<Outcome> | null = null
@@ -37,7 +42,7 @@ function describe(error: unknown) {
     : "Sign-in failed. Try again."
 }
 
-async function start(config: AuthConfig) {
+async function start(config: AuthConfig, privateAccess: boolean) {
   const state = randomToken()
   const verifier = randomToken()
   const returnTo = window.location.search + window.location.hash
@@ -50,7 +55,12 @@ async function start(config: AuthConfig) {
   }
   const challenge = await codeChallenge(verifier)
   window.location.assign(
-    buildAuthorizeUrl(config, redirectUri(), state, challenge)
+    buildAuthorizeUrl(config, {
+      redirectUri: redirectUri(),
+      state,
+      challenge,
+      privateAccess,
+    })
   )
 }
 
@@ -73,18 +83,28 @@ async function complete(): Promise<Outcome> {
     return { error: "Sign-in could not be verified. Try again." }
   }
   try {
-    const token = await exchangeCode(authConfig, {
+    const access = await exchangeCode(authConfig, {
       code: callback.code,
       verifier: pending.verifier,
       redirectUri: redirectUri(),
     })
-    return { token }
+    return { access }
   } catch (error) {
     return { error: describe(error) }
   }
 }
 
-export function useSignIn(onToken: (token: string) => void): SignIn {
+function accessOf({ token, privateAccess }: Access): SignInAccess {
+  if (!isSignInToken(token)) {
+    return "none"
+  }
+  return privateAccess ? "private" : "public"
+}
+
+export function useSignIn(
+  current: Access,
+  onAccess: (access: Access) => void
+): SignIn {
   const [pending, setPending] = useState(
     () => parseCallback(window.location.search)?.kind === "code"
   )
@@ -95,33 +115,41 @@ export function useSignIn(onToken: (token: string) => void): SignIn {
     if (!outcome) {
       return
     }
-    if ("token" in outcome) {
-      onToken(outcome.token)
+    if ("access" in outcome) {
+      onAccess(outcome.access)
     } else {
       setError(outcome.error)
     }
   })
 
   useEffect(() => {
-    let current = true
+    let mounted = true
     completion ??= complete()
     void completion.then((outcome) => {
-      if (current) {
+      if (mounted) {
         settle(outcome)
       }
     })
     return () => {
-      current = false
+      mounted = false
     }
   }, [])
 
-  const begin = useCallback(() => {
+  const begin = useCallback((privateAccess: boolean) => {
     if (!authConfig) {
       return
     }
     setError(null)
-    start(authConfig).catch((reason: unknown) => setError(describe(reason)))
+    start(authConfig, privateAccess).catch((reason: unknown) =>
+      setError(describe(reason))
+    )
   }, [])
 
-  return { available: authConfig !== null, pending, error, begin }
+  return {
+    available: authConfig !== null,
+    access: accessOf(current),
+    pending,
+    error,
+    begin,
+  }
 }

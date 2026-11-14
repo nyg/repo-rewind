@@ -96,16 +96,16 @@ describe("codeChallenge", () => {
 })
 
 describe("buildAuthorizeUrl", () => {
+  const request = {
+    redirectUri: "https://octocat.github.io/app/",
+    state: "the-state",
+    challenge: "the-challenge",
+    privateAccess: false,
+  }
+
   it("asks GitHub for a code without any scope", () => {
     // When
-    const url = new URL(
-      buildAuthorizeUrl(
-        config,
-        "https://octocat.github.io/app/",
-        "the-state",
-        "the-challenge"
-      )
-    )
+    const url = new URL(buildAuthorizeUrl(config, request))
 
     // Then
     expect(url.origin + url.pathname).toBe(
@@ -118,6 +118,16 @@ describe("buildAuthorizeUrl", () => {
       code_challenge: "the-challenge",
       code_challenge_method: "S256",
     })
+  })
+
+  it("asks for repository access when private repositories are wanted", () => {
+    // When
+    const url = new URL(
+      buildAuthorizeUrl(config, { ...request, privateAccess: true })
+    )
+
+    // Then
+    expect(url.searchParams.get("scope")).toBe("repo")
   })
 })
 
@@ -173,14 +183,14 @@ describe("exchangeCode", () => {
   it("returns the token from the exchange service", async () => {
     // Given
     const fetchFn = vi.fn<typeof fetch>(async () =>
-      Response.json({ access_token: "gho_token" })
+      Response.json({ access_token: "gho_token", scope: "" })
     )
 
     // When
-    const token = await exchangeCode(config, grant, fetchFn)
+    const access = await exchangeCode(config, grant, fetchFn)
 
     // Then
-    expect(token).toBe("gho_token")
+    expect(access).toEqual({ token: "gho_token", privateAccess: false })
     const [url, init] = fetchFn.mock.calls[0] ?? []
     expect(url).toBe(config.exchangeUrl)
     expect(Object.fromEntries(init?.body as URLSearchParams)).toEqual({
@@ -189,6 +199,38 @@ describe("exchangeCode", () => {
       redirect_uri: "https://octocat.github.io/app/",
     })
   })
+
+  it.each(["repo", "read:user,repo", "repo read:org"])(
+    "reports private access for the scope %j",
+    async (scope) => {
+      // Given
+      const fetchFn = vi.fn(async () =>
+        Response.json({ access_token: "gho_token", scope })
+      )
+
+      // When
+      const access = await exchangeCode(config, grant, fetchFn)
+
+      // Then
+      expect(access.privateAccess).toBe(true)
+    }
+  )
+
+  it.each(["", "public_repo", "repo:status", undefined])(
+    "reports no private access for the scope %j",
+    async (scope) => {
+      // Given
+      const fetchFn = vi.fn(async () =>
+        Response.json({ access_token: "gho_token", scope })
+      )
+
+      // When
+      const access = await exchangeCode(config, grant, fetchFn)
+
+      // Then
+      expect(access.privateAccess).toBe(false)
+    }
+  )
 
   it("explains why GitHub refused", async () => {
     // Given

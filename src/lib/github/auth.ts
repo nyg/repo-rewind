@@ -1,6 +1,7 @@
 const AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 const PENDING_KEY = "repo-rewind:sign-in"
 const OAUTH_TOKEN_PREFIX = "gho_"
+const PRIVATE_ACCESS_SCOPE = "repo"
 const RANDOM_BYTES = 32
 
 export interface AuthConfig {
@@ -11,6 +12,18 @@ export interface AuthConfig {
 export interface AuthEnv {
   VITE_GITHUB_CLIENT_ID?: string
   VITE_TOKEN_EXCHANGE_URL?: string
+}
+
+export interface AuthorizeRequest {
+  redirectUri: string
+  state: string
+  challenge: string
+  privateAccess: boolean
+}
+
+export interface Access {
+  token: string
+  privateAccess: boolean
 }
 
 export interface PendingSignIn {
@@ -53,17 +66,18 @@ export async function codeChallenge(verifier: string) {
 
 export function buildAuthorizeUrl(
   config: AuthConfig,
-  redirectUri: string,
-  state: string,
-  challenge: string
+  request: AuthorizeRequest
 ) {
   const params = new URLSearchParams({
     client_id: config.clientId,
-    redirect_uri: redirectUri,
-    state,
-    code_challenge: challenge,
+    redirect_uri: request.redirectUri,
+    state: request.state,
+    code_challenge: request.challenge,
     code_challenge_method: "S256",
   })
+  if (request.privateAccess) {
+    params.set("scope", PRIVATE_ACCESS_SCOPE)
+  }
   return `${AUTHORIZE_URL}?${params}`
 }
 
@@ -100,7 +114,7 @@ export async function exchangeCode(
   config: AuthConfig,
   grant: { code: string; verifier: string; redirectUri: string },
   fetchFn: typeof fetch = fetch
-) {
+): Promise<Access> {
   let response: Response
   try {
     response = await fetchFn(config.exchangeUrl, {
@@ -117,6 +131,7 @@ export async function exchangeCode(
 
   const payload = (await response.json().catch(() => ({}))) as {
     access_token?: unknown
+    scope?: unknown
     error?: unknown
   }
   if (!response.ok || typeof payload.access_token !== "string") {
@@ -124,7 +139,17 @@ export async function exchangeCode(
       typeof payload.error === "string" ? `: ${payload.error}` : ". Try again."
     throw new SignInError(`GitHub sign-in failed${reason}`)
   }
-  return payload.access_token
+  return {
+    token: payload.access_token,
+    privateAccess: grantsPrivateAccess(payload.scope),
+  }
+}
+
+function grantsPrivateAccess(scope: unknown) {
+  return (
+    typeof scope === "string" &&
+    scope.split(/[\s,]+/).includes(PRIVATE_ACCESS_SCOPE)
+  )
 }
 
 function base64Url(bytes: Uint8Array) {
