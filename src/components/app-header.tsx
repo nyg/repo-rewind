@@ -3,6 +3,7 @@ import { useState } from "react"
 
 import { ConnectForm, type ConnectionInput } from "@/components/connect-form"
 import { Logo } from "@/components/logo"
+import { SourceLink } from "@/components/source-link"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -46,6 +47,7 @@ export function AppHeader({
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-2.5 px-4 sm:px-6">
         <Logo className="size-6" />
         <span className="font-semibold tracking-tight">Repo Rewind</span>
+        <SourceLink />
 
         <div className="ml-auto flex items-center gap-1">
           <span

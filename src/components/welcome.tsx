@@ -1,5 +1,6 @@
 import { ConnectForm, type ConnectionInput } from "@/components/connect-form"
 import { Logo } from "@/components/logo"
+import { SourceLink } from "@/components/source-link"
 import { ThemeToggle } from "@/components/theme-toggle"
 import type { SignIn } from "@/hooks/use-sign-in"
 
@@ -33,6 +34,7 @@ export function Welcome({
       <header className="mx-auto flex h-14 w-full max-w-6xl items-center gap-2.5 px-4 sm:px-6">
         <Logo className="size-6" />
         <span className="font-semibold tracking-tight">Repo Rewind</span>
+        <SourceLink />
         <div className="ml-auto">
           <ThemeToggle />
         </div>
