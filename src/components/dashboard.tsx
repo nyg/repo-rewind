@@ -20,6 +20,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useDataset } from "@/hooks/use-dataset"
+import type { SignIn } from "@/hooks/use-sign-in"
 import {
   buildRepoSeries,
   createTimeline,
@@ -30,6 +31,7 @@ import {
   weeklyOverview,
 } from "@/lib/activity"
 import { formatClock } from "@/lib/format"
+import { isSignInToken } from "@/lib/github/auth"
 import { PUBLIC_REPO_LIMIT } from "@/lib/github/rest"
 import { GitHubError, type Dataset } from "@/lib/github/types"
 import type { Settings } from "@/lib/storage"
@@ -40,6 +42,7 @@ const PLAY_INTERVAL_MS = 45
 interface DashboardProps {
   settings: Settings
   now: number
+  signIn: SignIn
   onSettingsChange: (patch: Partial<Settings>) => void
   onDisconnect: () => void
 }
@@ -47,6 +50,7 @@ interface DashboardProps {
 export function Dashboard({
   settings,
   now,
+  signIn,
   onSettingsChange,
   onDisconnect,
 }: DashboardProps) {
@@ -149,16 +153,24 @@ export function Dashboard({
         connection={connection}
         loading={loading}
         progress={progress}
+        signIn={signIn}
         onRefresh={refresh}
         onConnect={onSettingsChange}
         onDisconnect={onDisconnect}
       />
       <main className="mx-auto grid max-w-7xl grid-cols-1 gap-6 px-4 py-6 sm:px-6 sm:py-8">
-        {error && <LoadError error={error} onRetry={refresh} />}
+        {signIn.error && <SignInFailure signIn={signIn} />}
+        {error && (
+          <LoadError
+            error={error}
+            signedIn={isSignInToken(settings.token)}
+            onRetry={refresh}
+          />
+        )}
         {dataset ? (
           <>
             {dataset.mode === "public" && !loading && (
-              <PublicNotice dataset={dataset} />
+              <PublicNotice dataset={dataset} canSignIn={signIn.available} />
             )}
             <DateToolbar
               date={dayStart(timeline, day)}
@@ -231,7 +243,13 @@ function LoadingPlaceholder() {
   )
 }
 
-function PublicNotice({ dataset }: { dataset: Dataset }) {
+function PublicNotice({
+  dataset,
+  canSignIn,
+}: {
+  dataset: Dataset
+  canSignIn: boolean
+}) {
   const skipped = dataset.repos.filter((repo) => !repo.loaded).length
   return (
     <Alert>
@@ -240,21 +258,24 @@ function PublicNotice({ dataset }: { dataset: Dataset }) {
       <AlertDescription>
         Showing up to {PUBLIC_REPO_LIMIT} recently pushed public repositories,
         without line counts
-        {skipped > 0 ? `; ${skipped} more were not loaded` : ""}. Add an access
-        token from the account menu to see everything, private repositories
-        included.
+        {skipped > 0 ? `; ${skipped} more were not loaded` : ""}.{" "}
+        {canSignIn
+          ? "Sign in with GitHub from the account menu for the full list and line counts, or add an access token to include private repositories too."
+          : "Add an access token from the account menu to see everything, private repositories included."}
       </AlertDescription>
     </Alert>
   )
 }
 
-function describeError(error: Error) {
+function describeError(error: Error, signedIn: boolean) {
   if (!(error instanceof GitHubError)) {
     return error.message
   }
   switch (error.kind) {
     case "auth":
-      return "GitHub rejected the access token. It may have expired or been revoked: set a new one from the account menu."
+      return signedIn
+        ? "GitHub rejected the sign-in. It may have been revoked: sign out from the account menu, then sign in again."
+        : "GitHub rejected the access token. It may have expired or been revoked: set a new one from the account menu."
     case "rate-limit":
       return error.resetAt
         ? `${error.message} It resets at ${formatClock(error.resetAt)}.`
@@ -264,13 +285,41 @@ function describeError(error: Error) {
   }
 }
 
-function LoadError({ error, onRetry }: { error: Error; onRetry: () => void }) {
+function SignInFailure({ signIn }: { signIn: SignIn }) {
+  return (
+    <Alert variant="destructive">
+      <TriangleAlertIcon />
+      <AlertTitle>Could not sign in with GitHub</AlertTitle>
+      <AlertDescription>
+        <p>{signIn.error}</p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-2"
+          onClick={signIn.begin}
+        >
+          Try again
+        </Button>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+function LoadError({
+  error,
+  signedIn,
+  onRetry,
+}: {
+  error: Error
+  signedIn: boolean
+  onRetry: () => void
+}) {
   return (
     <Alert variant="destructive">
       <TriangleAlertIcon />
       <AlertTitle>Could not load from GitHub</AlertTitle>
       <AlertDescription>
-        <p>{describeError(error)}</p>
+        <p>{describeError(error, signedIn)}</p>
         <Button variant="outline" size="sm" className="mt-2" onClick={onRetry}>
           Try again
         </Button>

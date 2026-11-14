@@ -1,8 +1,11 @@
 import { useId, useState } from "react"
 
+import { GitHubMark } from "@/components/github-mark"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import type { SignIn } from "@/hooks/use-sign-in"
+import { isSignInToken } from "@/lib/github/auth"
 
 const NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new"
 
@@ -14,12 +17,14 @@ export interface ConnectionInput {
 interface ConnectFormProps {
   initial: ConnectionInput
   submitLabel: string
+  signIn: SignIn
   onSubmit: (connection: ConnectionInput) => void
 }
 
 export function ConnectForm({
   initial,
   submitLabel,
+  signIn,
   onSubmit,
 }: ConnectFormProps) {
   const [login, setLogin] = useState(initial.login)
@@ -27,6 +32,7 @@ export function ConnectForm({
   const loginId = useId()
   const tokenId = useId()
   const ready = login.trim() !== "" || token.trim() !== ""
+  const offersSignIn = signIn.available && !isSignInToken(initial.token)
 
   return (
     <form
@@ -41,6 +47,7 @@ export function ConnectForm({
         }
       }}
     >
+      {offersSignIn && <SignInOption signIn={signIn} />}
       <div className="grid gap-1.5">
         <Label htmlFor={loginId}>GitHub username or organization</Label>
         <Input
@@ -84,9 +91,38 @@ export function ConnectForm({
           and is sent only to api.github.com.
         </p>
       </div>
-      <Button type="submit" disabled={!ready}>
+      <Button
+        type="submit"
+        variant={offersSignIn ? "outline" : "default"}
+        disabled={!ready}
+      >
         {submitLabel}
       </Button>
     </form>
+  )
+}
+
+function SignInOption({ signIn }: { signIn: SignIn }) {
+  return (
+    <>
+      <div className="grid gap-1.5">
+        <Button type="button" disabled={signIn.pending} onClick={signIn.begin}>
+          <GitHubMark />
+          {signIn.pending ? "Signing in…" : "Sign in with GitHub"}
+        </Button>
+        {signIn.error && (
+          <p role="alert" className="text-xs text-destructive">
+            {signIn.error}
+          </p>
+        )}
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Asks for no permissions: you get every public repository, with line
+          counts. Private repositories need a token.
+        </p>
+      </div>
+      <p className="flex items-center gap-3 text-xs text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
+        or enter a username or a token
+      </p>
+    </>
   )
 }
