@@ -137,6 +137,7 @@ export function TimelineCard({
             <ChartTooltip
               cursor={{ fill: "var(--muted)" }}
               isAnimationActive={false}
+              wrapperStyle={{ zIndex: 20 }}
               content={
                 <OverviewTooltip
                   overview={overview}
