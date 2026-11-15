@@ -6,7 +6,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
 
 const GITHUB_API = 'https://api.github.com'
 
-// The access token lives in localStorage, so the built page may only talk to GitHub and the sign-in service.
+// The access token lives in localStorage, so the built page may only talk to GitHub, the sign-in service and the page-view counter.
 function contentSecurityPolicy(connectSources: string[]): Plugin {
    const policy = [
       'default-src \'self\'',
@@ -36,8 +36,9 @@ function contentSecurityPolicy(connectSources: string[]): Plugin {
 
 function connectSources(mode: string) {
    const env = loadEnv(mode, import.meta.dirname, 'VITE_')
-   const exchangeUrl = env.VITE_TOKEN_EXCHANGE_URL?.trim()
-   return exchangeUrl ? [GITHUB_API, new URL(exchangeUrl).origin] : [GITHUB_API]
+   const serviceUrls = [env.VITE_TOKEN_EXCHANGE_URL?.trim(), env.VITE_HIT_URL?.trim()]
+   const serviceOrigins = serviceUrls.flatMap(url => (url ? [new URL(url).origin] : []))
+   return [GITHUB_API, ...serviceOrigins]
 }
 
 // https://vite.dev/config/
