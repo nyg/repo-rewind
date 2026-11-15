@@ -53,7 +53,10 @@ GitHub will not hand a token to a browser directly: the last step of its OAuth f
 
 ### 1. Register an OAuth App
 
-On GitHub, go to **Settings → Developer settings → OAuth Apps → New OAuth App**. Set both **Homepage URL** and **Authorization callback URL** to the address of the deployed site, for example `https://octocat.github.io/repo-rewind/`.
+On GitHub, go to **Settings → Developer settings → OAuth Apps → New OAuth App**.
+
+- **Homepage URL** and **Redirect URI**: the address of the deployed site, for example `https://octocat.github.io/repo-rewind/`.
+- **Expire user access tokens**: leave it unchecked. The site keeps a single access token and does not refresh it, so an expiring token would end the sign-in after eight hours.
 
 Note the **Client ID** and generate a **client secret**. The app asks for no scopes unless the visitor chooses to include private repositories, so by default a signed-in visitor grants read access to public data only.
 
@@ -78,7 +81,7 @@ Add two repository variables under **Settings → Secrets and variables → Acti
 | `OAUTH_CLIENT_ID` | the Client ID |
 | `TOKEN_EXCHANGE_URL` | `https://<project>.vercel.app/api/token` |
 
-For a local build, copy `.env.example` to `.env.local` and fill in the same two values. Sign-in only completes on an address that is both registered as the callback URL in step 1 and allowed by the function's `ALLOWED_ORIGIN`.
+For a local build, copy `.env.example` to `.env.local` and fill in the same two values. Sign-in only completes on an address that is both registered as a redirect URI in step 1 and allowed by the function's `ALLOWED_ORIGIN`.
 
 ## Deploy to GitHub Pages
 
