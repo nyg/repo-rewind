@@ -43,6 +43,26 @@ With a token it uses the GraphQL API and shows everything, private repositories 
 
 Signing in with GitHub also uses the GraphQL API. By default it asks for no permissions and shows every public repository with line counts, but no private ones. The visitor can turn on **Include private repositories** before signing in. GitHub has no read-only OAuth scope for private repositories, so this asks for the `repo` scope, which grants read and write access, although the app only reads. Private repositories of an organization also need that organization to approve the OAuth App.
 
-Either way the access token is stored in this browser's `localStorage` and is only sent to `api.github.com`. The production build ships a Content Security Policy that blocks requests to any other host, apart from the sign-in service.
+Either way the access token is stored in this browser's `localStorage` and is only sent to `api.github.com`. The production build ships a Content Security Policy that blocks requests to any other host, apart from the sign-in service and, when page views are counted, the Worker described below.
 
 Fetched data is cached in `localStorage`. A refresh only refetches repositories that changed.
+
+## Page views
+
+Counting page views is optional: the build counts nothing unless `VITE_HIT_URL` is set (repository variable `HIT_URL` for the deploy workflow, `.env.local` for a local build).
+
+Views go to [GoatCounter](https://www.goatcounter.com) through the small Cloudflare Worker in `worker/`, so that blockers listing GoatCounter's domains don't drop them. On load the app sends the Worker the page path without its query string, the page title, the referrer and the screen size, never the access token. The Worker adds the visitor's IP address, user agent and language, and forwards the hit to GoatCounter's API. No cookie is set.
+
+Set `ALLOWED_ORIGIN` and `GOATCOUNTER_URL` in `worker/wrangler.jsonc` to the origin of the site and to the address of the GoatCounter site, then:
+
+```bash
+cd worker
+pnpm install
+
+# a GoatCounter API token allowed to record pageviews, never committed (use worker/.dev.vars for local runs)
+pnpm wrangler secret put GOATCOUNTER_TOKEN
+
+pnpm run deploy
+```
+
+The Worker answers at `https://<name>.<account>.workers.dev/hit`, the value for `VITE_HIT_URL`, and only to `POST` requests coming from `ALLOWED_ORIGIN`.
