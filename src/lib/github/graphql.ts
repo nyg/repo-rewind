@@ -1,19 +1,19 @@
-import { classifyActor } from "./classify"
-import { limitConcurrency } from "./pool"
+import { classifyActor } from './classify'
+import { limitConcurrency } from './pool'
 import {
-  GitHubError,
-  type CommitEvent,
-  type Dataset,
-  type LoadProgress,
-  type Owner,
-  type PullEvent,
-  type RateLimit,
-  type Repo,
-} from "./types"
+   type CommitEvent,
+   type Dataset,
+   GitHubError,
+   type LoadProgress,
+   type Owner,
+   type PullEvent,
+   type RateLimit,
+   type Repo,
+} from './types'
 
 export const DATASET_VERSION = 1
 
-const ENDPOINT = "https://api.github.com/graphql"
+const ENDPOINT = 'https://api.github.com/graphql'
 const MAX_CONCURRENT_REQUESTS = 12
 const MAX_COMMITS_PER_REPO = 2000
 const INITIAL_COMMIT_PAGE = 50
@@ -25,93 +25,93 @@ const MIN_REPO_PAGE = 10
 const HISTORY_CURSOR = /^([0-9a-f]+) (\d+)$/
 
 export type GraphqlTransport = (
-  query: string,
-  variables: Record<string, unknown>,
-  signal?: AbortSignal
+   query: string,
+   variables: Record<string, unknown>,
+   signal?: AbortSignal
 ) => Promise<unknown>
 
 export class QueryTimeout extends Error {
-  constructor(message = "GitHub took too long to answer.") {
-    super(message)
-    this.name = "QueryTimeout"
-  }
+   constructor(message = 'GitHub took too long to answer.') {
+      super(message)
+      this.name = 'QueryTimeout'
+   }
 }
 
 export function createGraphqlTransport(token: string): GraphqlTransport {
-  return async (query, variables, signal) => {
-    let response: Response
-    try {
-      response = await fetch(ENDPOINT, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ query, variables }),
-        signal,
-      })
-    } catch (error) {
-      if (signal?.aborted) {
-        throw error
+   return async (query, variables, signal) => {
+      let response: Response
+      try {
+         response = await fetch(ENDPOINT, {
+            method: 'POST',
+            headers: {
+               Authorization: `Bearer ${token}`,
+               'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query, variables }),
+            signal,
+         })
+      } catch (error) {
+         if (signal?.aborted) {
+            throw error
+         }
+         if (globalThis.navigator?.onLine === false) {
+            throw new GitHubError('network', 'Could not reach api.github.com.')
+         }
+         // GitHub answers a query that runs past 10 s with a 502 that has no CORS headers, so the browser only reports a failed fetch.
+         throw new QueryTimeout(
+            'Could not reach api.github.com, or it took too long to answer.'
+         )
       }
-      if (globalThis.navigator?.onLine === false) {
-        throw new GitHubError("network", "Could not reach api.github.com.")
+
+      if (response.status === 401) {
+         throw new GitHubError('auth', 'GitHub rejected this token.')
       }
-      // GitHub answers a query that runs past 10 s with a 502 that has no CORS headers, so the browser only reports a failed fetch.
-      throw new QueryTimeout(
-        "Could not reach api.github.com, or it took too long to answer."
-      )
-    }
+      if (response.status === 502 || response.status === 504) {
+         throw new QueryTimeout()
+      }
+      if (response.status === 403 || response.status === 429) {
+         const reset = Number(response.headers.get('x-ratelimit-reset')) * 1000
+         throw new GitHubError(
+            'rate-limit',
+            'GitHub rate limit reached.',
+            Number.isFinite(reset) && reset > 0 ? reset : null
+         )
+      }
+      if (!response.ok) {
+         throw new GitHubError(
+            'unknown',
+            `GitHub answered with HTTP ${response.status}.`
+         )
+      }
 
-    if (response.status === 401) {
-      throw new GitHubError("auth", "GitHub rejected this token.")
-    }
-    if (response.status === 502 || response.status === 504) {
-      throw new QueryTimeout()
-    }
-    if (response.status === 403 || response.status === 429) {
-      const reset = Number(response.headers.get("x-ratelimit-reset")) * 1000
-      throw new GitHubError(
-        "rate-limit",
-        "GitHub rate limit reached.",
-        Number.isFinite(reset) && reset > 0 ? reset : null
-      )
-    }
-    if (!response.ok) {
-      throw new GitHubError(
-        "unknown",
-        `GitHub answered with HTTP ${response.status}.`
-      )
-    }
-
-    const body = (await response.json()) as GraphqlBody
-    if (body.data) {
-      return body.data
-    }
-    throw toGitHubError(body.errors ?? [])
-  }
+      const body = (await response.json()) as GraphqlBody
+      if (body.data) {
+         return body.data
+      }
+      throw toGitHubError(body.errors ?? [])
+   }
 }
 
 interface GraphqlBody {
-  data?: unknown
-  errors?: { type?: string; message: string }[]
+   data?: unknown
+   errors?: { type?: string, message: string }[]
 }
 
-function toGitHubError(errors: { type?: string; message: string }[]) {
-  const [first] = errors
-  if (!first) {
-    return new GitHubError("unknown", "GitHub returned an empty response.")
-  }
-  if (first.type === "RATE_LIMITED") {
-    return new GitHubError("rate-limit", "GitHub rate limit reached.")
-  }
-  if (first.type === "NOT_FOUND") {
-    return new GitHubError("not-found", first.message)
-  }
-  if (/timeout|something went wrong/i.test(first.message)) {
-    return new QueryTimeout()
-  }
-  return new GitHubError("unknown", first.message)
+function toGitHubError(errors: { type?: string, message: string }[]) {
+   const [first] = errors
+   if (!first) {
+      return new GitHubError('unknown', 'GitHub returned an empty response.')
+   }
+   if (first.type === 'RATE_LIMITED') {
+      return new GitHubError('rate-limit', 'GitHub rate limit reached.')
+   }
+   if (first.type === 'NOT_FOUND') {
+      return new GitHubError('not-found', first.message)
+   }
+   if (/timeout|something went wrong/i.test(first.message)) {
+      return new QueryTimeout()
+   }
+   return new GitHubError('unknown', first.message)
 }
 
 const VIEWER_QUERY = /* GraphQL */ `
@@ -280,599 +280,599 @@ const PULLS_QUERY = /* GraphQL */ `
 `
 
 interface PageInfo {
-  hasNextPage: boolean
-  endCursor: string | null
+   hasNextPage: boolean
+   endCursor: string | null
 }
 
 interface RepoNode {
-  id: string
-  name: string
-  nameWithOwner: string
-  description: string | null
-  url: string
-  isPrivate: boolean
-  isFork: boolean
-  isArchived: boolean
-  pushedAt: string | null
-  stargazerCount: number
-  primaryLanguage: { name: string; color: string | null } | null
-  defaultBranchRef: { target: { oid: string } | null } | null
-  pullRequests: { totalCount: number } | null
-  openPullRequests: { totalCount: number } | null
+   id: string
+   name: string
+   nameWithOwner: string
+   description: string | null
+   url: string
+   isPrivate: boolean
+   isFork: boolean
+   isArchived: boolean
+   pushedAt: string | null
+   stargazerCount: number
+   primaryLanguage: { name: string, color: string | null } | null
+   defaultBranchRef: { target: { oid: string } | null } | null
+   pullRequests: { totalCount: number } | null
+   openPullRequests: { totalCount: number } | null
 }
 
-type ListedRepo = Omit<RepoNode, "pullRequests" | "openPullRequests">
+type ListedRepo = Omit<RepoNode, 'pullRequests' | 'openPullRequests'>
 
-type PullCounts = Pick<RepoNode, "id" | "pullRequests" | "openPullRequests">
+type PullCounts = Pick<RepoNode, 'id' | 'pullRequests' | 'openPullRequests'>
 
 interface Repositories<Node> {
-  pageInfo: PageInfo
-  nodes: Node[]
+   pageInfo: PageInfo
+   nodes: Node[]
 }
 
 interface RepositoriesData<Node> {
-  repositoryOwner: { repositories: Repositories<Node> } | null
+   repositoryOwner: { repositories: Repositories<Node> } | null
 }
 
 interface OwnerData extends RepositoriesData<ListedRepo> {
-  viewer: { login: string }
-  rateLimit: { remaining: number; resetAt: string } | null
-  repositoryOwner: {
-    __typename: "User" | "Organization"
-    id: string
-    login: string
-    avatarUrl: string
-    url: string
-    name?: string | null
-    repositories: Repositories<ListedRepo>
-  } | null
+   viewer: { login: string }
+   rateLimit: { remaining: number, resetAt: string } | null
+   repositoryOwner: {
+      __typename: 'User' | 'Organization'
+      id: string
+      login: string
+      avatarUrl: string
+      url: string
+      name?: string | null
+      repositories: Repositories<ListedRepo>
+   } | null
 }
 
 interface CommitNode {
-  committedDate: string
-  additions: number
-  deletions: number
-  parents: { totalCount: number }
-  author: {
-    name: string | null
-    user: { login: string } | null
-  } | null
+   committedDate: string
+   additions: number
+   deletions: number
+   parents: { totalCount: number }
+   author: {
+      name: string | null
+      user: { login: string } | null
+   } | null
 }
 
 interface CommitsData {
-  repository: {
-    defaultBranchRef: {
-      target: {
-        history?: {
-          totalCount: number
-          pageInfo: PageInfo
-          nodes: CommitNode[]
-        }
+   repository: {
+      defaultBranchRef: {
+         target: {
+            history?: {
+               totalCount: number
+               pageInfo: PageInfo
+               nodes: CommitNode[]
+            }
+         } | null
       } | null
-    } | null
-  } | null
+   } | null
 }
 
 interface PullsData {
-  repository: {
-    pullRequests: {
-      pageInfo: PageInfo
-      nodes: {
-        createdAt: string
-        updatedAt: string
-        mergedAt: string | null
-        closedAt: string | null
-        author: { __typename: string; login: string } | null
-      }[]
-    } | null
-  } | null
+   repository: {
+      pullRequests: {
+         pageInfo: PageInfo
+         nodes: {
+            createdAt: string
+            updatedAt: string
+            mergedAt: string | null
+            closedAt: string | null
+            author: { __typename: string, login: string } | null
+         }[]
+      } | null
+   } | null
 }
 
 export interface TokenLoadOptions {
-  transport: GraphqlTransport
-  login: string | null
-  since: number
-  cached: Dataset | null
-  signal?: AbortSignal
-  onProgress?: (progress: LoadProgress) => void
-  onUpdate?: (dataset: Dataset) => void
+   transport: GraphqlTransport
+   login: string | null
+   since: number
+   cached: Dataset | null
+   signal?: AbortSignal
+   onProgress?: (progress: LoadProgress) => void
+   onUpdate?: (dataset: Dataset) => void
 }
 
 interface RepoPlan {
-  node: RepoNode
-  ownerLogin: string
-  authorId: string | null
+   node: RepoNode
+   ownerLogin: string
+   authorId: string | null
 }
 
 interface CommitPage {
-  commits: CommitEvent[]
-  totalCount: number
-  pageInfo: PageInfo
+   commits: CommitEvent[]
+   totalCount: number
+   pageInfo: PageInfo
 }
 
 type CommitPageLoader = (
-  after: string | null,
-  first: number
+   after: string | null,
+   first: number
 ) => Promise<CommitPage | null>
 
 export async function loadWithToken(
-  options: TokenLoadOptions
+   options: TokenLoadOptions
 ): Promise<Dataset> {
-  const { since, cached, signal } = options
-  const transport = limitConcurrency(
-    options.transport,
-    MAX_CONCURRENT_REQUESTS,
-    isFatal
-  )
-  const login = options.login ?? (await fetchViewerLogin(transport, signal))
-  const { owner, ownerId, viewerLogin, nodes, rateLimit } = await fetchOwner(
-    transport,
-    login,
-    signal
-  )
-  const selfLogins = owner.isOrganization
-    ? [viewerLogin]
-    : [owner.login, viewerLogin]
-  const reusable = reusableRepos(cached, owner.login, since)
+   const { since, cached, signal } = options
+   const transport = limitConcurrency(
+      options.transport,
+      MAX_CONCURRENT_REQUESTS,
+      isFatal
+   )
+   const login = options.login ?? (await fetchViewerLogin(transport, signal))
+   const { owner, ownerId, viewerLogin, nodes, rateLimit } = await fetchOwner(
+      transport,
+      login,
+      signal
+   )
+   const selfLogins = owner.isOrganization
+      ? [viewerLogin]
+      : [owner.login, viewerLogin]
+   const reusable = reusableRepos(cached, owner.login, since)
 
-  const repos: Repo[] = nodes.map((node) => {
-    const signature = signatureOf(node)
-    const fresh = toRepo(node, signature)
-    const previous = reusable.get(node.nameWithOwner)
-    if (!previous) {
-      return fresh
-    }
-    return {
-      ...fresh,
-      ...eventsWithin(previous, since),
-      loaded: previous.signature === signature,
-    }
-  })
-
-  const dataset: Dataset = {
-    version: DATASET_VERSION,
-    mode: "token",
-    owner,
-    since,
-    fetchedAt: Date.now(),
-    hasLineStats: true,
-    repos,
-    rateLimit,
-  }
-
-  const pending = repos
-    .map((repo, index) => ({ repo, index }))
-    .filter(({ repo }) => !repo.loaded)
-  let done = 0
-  options.onProgress?.({ done, total: pending.length, current: null })
-  options.onUpdate?.(snapshot(dataset))
-
-  const outcomes = await Promise.allSettled(
-    pending.map(async ({ repo, index }) => {
-      const node = nodes[index]
-      const plan: RepoPlan = {
-        node,
-        ownerLogin: owner.login,
-        authorId: node.isFork && !owner.isOrganization ? ownerId : null,
+   const repos: Repo[] = nodes.map((node) => {
+      const signature = signatureOf(node)
+      const fresh = toRepo(node, signature)
+      const previous = reusable.get(node.nameWithOwner)
+      if (!previous) {
+         return fresh
       }
-      repos[index] = await loadRepoEvents(
-        transport,
-        plan,
-        repo,
-        since,
-        selfLogins,
-        signal
-      )
-      done += 1
-      options.onProgress?.({
-        done,
-        total: pending.length,
-        current: repo.nameWithOwner,
-      })
-      options.onUpdate?.(snapshot(dataset))
-    })
-  )
-  const failure = outcomes.find((outcome) => outcome.status === "rejected")
-  if (failure) {
-    throw failure.reason
-  }
+      return {
+         ...fresh,
+         ...eventsWithin(previous, since),
+         loaded: previous.signature === signature,
+      }
+   })
 
-  return snapshot({ ...dataset, fetchedAt: Date.now() })
+   const dataset: Dataset = {
+      version: DATASET_VERSION,
+      mode: 'token',
+      owner,
+      since,
+      fetchedAt: Date.now(),
+      hasLineStats: true,
+      repos,
+      rateLimit,
+   }
+
+   const pending = repos
+      .map((repo, index) => ({ repo, index }))
+      .filter(({ repo }) => !repo.loaded)
+   let done = 0
+   options.onProgress?.({ done, total: pending.length, current: null })
+   options.onUpdate?.(snapshot(dataset))
+
+   const outcomes = await Promise.allSettled(
+      pending.map(async ({ repo, index }) => {
+         const node = nodes[index]
+         const plan: RepoPlan = {
+            node,
+            ownerLogin: owner.login,
+            authorId: node.isFork && !owner.isOrganization ? ownerId : null,
+         }
+         repos[index] = await loadRepoEvents(
+            transport,
+            plan,
+            repo,
+            since,
+            selfLogins,
+            signal
+         )
+         done += 1
+         options.onProgress?.({
+            done,
+            total: pending.length,
+            current: repo.nameWithOwner,
+         })
+         options.onUpdate?.(snapshot(dataset))
+      })
+   )
+   const failure = outcomes.find((outcome) => outcome.status === 'rejected')
+   if (failure) {
+      throw failure.reason
+   }
+
+   return snapshot({ ...dataset, fetchedAt: Date.now() })
 }
 
 function snapshot(dataset: Dataset): Dataset {
-  return { ...dataset, repos: [...dataset.repos] }
+   return { ...dataset, repos: [...dataset.repos] }
 }
 
 async function fetchViewerLogin(
-  transport: GraphqlTransport,
-  signal?: AbortSignal
+   transport: GraphqlTransport,
+   signal?: AbortSignal
 ) {
-  const data = (await transport(VIEWER_QUERY, {}, signal)) as {
-    viewer: { login: string }
-  }
-  return data.viewer.login
+   const data = (await transport(VIEWER_QUERY, {}, signal)) as {
+      viewer: { login: string }
+   }
+   return data.viewer.login
 }
 
 async function fetchOwner(
-  transport: GraphqlTransport,
-  login: string,
-  signal?: AbortSignal
+   transport: GraphqlTransport,
+   login: string,
+   signal?: AbortSignal
 ) {
-  const [listed, counted] = await Promise.all([
-    fetchRepositories<ListedRepo, OwnerData>(
-      transport,
-      OWNER_QUERY,
-      login,
-      signal
-    ),
-    fetchRepositories<PullCounts>(transport, PULL_COUNTS_QUERY, login, signal),
-  ])
-  const counts = new Map(counted.nodes.map((node) => [node.id, node]))
-  const nodes: RepoNode[] = listed.nodes.map((node) => ({
-    ...node,
-    pullRequests: counts.get(node.id)?.pullRequests ?? null,
-    openPullRequests: counts.get(node.id)?.openPullRequests ?? null,
-  }))
+   const [listed, counted] = await Promise.all([
+      fetchRepositories<ListedRepo, OwnerData>(
+         transport,
+         OWNER_QUERY,
+         login,
+         signal
+      ),
+      fetchRepositories<PullCounts>(transport, PULL_COUNTS_QUERY, login, signal),
+   ])
+   const counts = new Map(counted.nodes.map((node) => [node.id, node]))
+   const nodes: RepoNode[] = listed.nodes.map((node) => ({
+      ...node,
+      pullRequests: counts.get(node.id)?.pullRequests ?? null,
+      openPullRequests: counts.get(node.id)?.openPullRequests ?? null,
+   }))
 
-  const { first } = listed
-  const account = first.repositoryOwner!
-  const owner: Owner = {
-    login: account.login,
-    name: account.name ?? null,
-    avatarUrl: account.avatarUrl,
-    url: account.url,
-    isOrganization: account.__typename === "Organization",
-  }
-  const rateLimit: RateLimit | null = first.rateLimit
-    ? {
-        remaining: first.rateLimit.remaining,
-        resetAt: Date.parse(first.rateLimit.resetAt),
+   const { first } = listed
+   const account = first.repositoryOwner!
+   const owner: Owner = {
+      login: account.login,
+      name: account.name ?? null,
+      avatarUrl: account.avatarUrl,
+      url: account.url,
+      isOrganization: account.__typename === 'Organization',
+   }
+   const rateLimit: RateLimit | null = first.rateLimit
+      ? {
+         remaining: first.rateLimit.remaining,
+         resetAt: Date.parse(first.rateLimit.resetAt),
       }
-    : null
+      : null
 
-  return {
-    owner,
-    ownerId: account.id,
-    viewerLogin: first.viewer.login,
-    nodes,
-    rateLimit,
-  }
+   return {
+      owner,
+      ownerId: account.id,
+      viewerLogin: first.viewer.login,
+      nodes,
+      rateLimit,
+   }
 }
 
 async function fetchRepositories<
-  Node,
-  Data extends RepositoriesData<Node> = RepositoriesData<Node>,
+   Node,
+   Data extends RepositoriesData<Node> = RepositoriesData<Node>,
 >(
-  transport: GraphqlTransport,
-  query: string,
-  login: string,
-  signal?: AbortSignal
+   transport: GraphqlTransport,
+   query: string,
+   login: string,
+   signal?: AbortSignal
 ) {
-  const nodes: Node[] = []
-  let pageSize = INITIAL_REPO_PAGE
-  let cursor: string | null = null
-  let first: Data | null = null
+   const nodes: Node[] = []
+   let pageSize = INITIAL_REPO_PAGE
+   let cursor: string | null = null
+   let first: Data | null = null
 
-  for (;;) {
-    let data: Data
-    try {
-      data = (await transport(
-        query,
-        { login, first: pageSize, cursor },
-        signal
-      )) as Data
-    } catch (error) {
-      if (error instanceof QueryTimeout && pageSize > MIN_REPO_PAGE) {
-        pageSize = Math.max(MIN_REPO_PAGE, Math.floor(pageSize / 2))
-        continue
+   for (;;) {
+      let data: Data
+      try {
+         data = (await transport(
+            query,
+            { login, first: pageSize, cursor },
+            signal
+         )) as Data
+      } catch (error) {
+         if (error instanceof QueryTimeout && pageSize > MIN_REPO_PAGE) {
+            pageSize = Math.max(MIN_REPO_PAGE, Math.floor(pageSize / 2))
+            continue
+         }
+         throw error
       }
-      throw error
-    }
-    if (!data.repositoryOwner) {
-      throw new GitHubError("not-found", `No GitHub account named “${login}”.`)
-    }
-    first ??= data
-    nodes.push(...data.repositoryOwner.repositories.nodes)
-    const pageInfo: PageInfo = data.repositoryOwner.repositories.pageInfo
-    if (!pageInfo.hasNextPage || !pageInfo.endCursor) {
-      return { first, nodes }
-    }
-    cursor = pageInfo.endCursor
-  }
+      if (!data.repositoryOwner) {
+         throw new GitHubError('not-found', `No GitHub account named “${login}”.`)
+      }
+      first ??= data
+      nodes.push(...data.repositoryOwner.repositories.nodes)
+      const pageInfo: PageInfo = data.repositoryOwner.repositories.pageInfo
+      if (!pageInfo.hasNextPage || !pageInfo.endCursor) {
+         return { first, nodes }
+      }
+      cursor = pageInfo.endCursor
+   }
 }
 
 function signatureOf(node: RepoNode) {
-  return [
-    node.defaultBranchRef?.target?.oid ?? "empty",
-    node.pushedAt ?? "never",
-    node.pullRequests?.totalCount ?? 0,
-    node.openPullRequests?.totalCount ?? 0,
-  ].join("|")
+   return [
+      node.defaultBranchRef?.target?.oid ?? 'empty',
+      node.pushedAt ?? 'never',
+      node.pullRequests?.totalCount ?? 0,
+      node.openPullRequests?.totalCount ?? 0,
+   ].join('|')
 }
 
 function toRepo(node: RepoNode, signature: string): Repo {
-  return {
-    id: node.id,
-    name: node.name,
-    nameWithOwner: node.nameWithOwner,
-    description: node.description,
-    url: node.url,
-    isPrivate: node.isPrivate,
-    isFork: node.isFork,
-    isArchived: node.isArchived,
-    stars: node.stargazerCount,
-    pushedAt: node.pushedAt ? Date.parse(node.pushedAt) : 0,
-    language: node.primaryLanguage,
-    signature,
-    commits: [],
-    pulls: [],
-    loaded: false,
-    truncated: false,
-    error: null,
-  }
+   return {
+      id: node.id,
+      name: node.name,
+      nameWithOwner: node.nameWithOwner,
+      description: node.description,
+      url: node.url,
+      isPrivate: node.isPrivate,
+      isFork: node.isFork,
+      isArchived: node.isArchived,
+      stars: node.stargazerCount,
+      pushedAt: node.pushedAt ? Date.parse(node.pushedAt) : 0,
+      language: node.primaryLanguage,
+      signature,
+      commits: [],
+      pulls: [],
+      loaded: false,
+      truncated: false,
+      error: null,
+   }
 }
 
 function reusableRepos(cached: Dataset | null, login: string, since: number) {
-  const usable =
-    cached &&
-    cached.version === DATASET_VERSION &&
-    cached.mode === "token" &&
-    cached.owner.login.toLowerCase() === login.toLowerCase() &&
-    cached.since <= since
-  const repos = usable
-    ? cached.repos.filter((repo) => repo.loaded && !repo.error)
-    : []
-  return new Map(repos.map((repo) => [repo.nameWithOwner, repo]))
+   const usable =
+      cached &&
+      cached.version === DATASET_VERSION &&
+      cached.mode === 'token' &&
+      cached.owner.login.toLowerCase() === login.toLowerCase() &&
+      cached.since <= since
+   const repos = usable
+      ? cached.repos.filter((repo) => repo.loaded && !repo.error)
+      : []
+   return new Map(repos.map((repo) => [repo.nameWithOwner, repo]))
 }
 
 function eventsWithin(repo: Repo, since: number) {
-  return {
-    commits: repo.commits.filter((commit) => commit.at >= since),
-    pulls: repo.pulls.filter((pull) => pullTouches(pull, since)),
-    truncated: repo.truncated,
-  }
+   return {
+      commits: repo.commits.filter((commit) => commit.at >= since),
+      pulls: repo.pulls.filter((pull) => pullTouches(pull, since)),
+      truncated: repo.truncated,
+   }
 }
 
 function pullTouches(pull: PullEvent, since: number) {
-  return (
-    pull.createdAt >= since ||
-    (pull.mergedAt ?? 0) >= since ||
-    (pull.closedAt ?? 0) >= since
-  )
+   return (
+      pull.createdAt >= since ||
+      (pull.mergedAt ?? 0) >= since ||
+      (pull.closedAt ?? 0) >= since
+   )
 }
 
 async function loadRepoEvents(
-  transport: GraphqlTransport,
-  plan: RepoPlan,
-  repo: Repo,
-  since: number,
-  selfLogins: string[],
-  signal?: AbortSignal
+   transport: GraphqlTransport,
+   plan: RepoPlan,
+   repo: Repo,
+   since: number,
+   selfLogins: string[],
+   signal?: AbortSignal
 ): Promise<Repo> {
-  if (repo.pushedAt < since) {
-    return { ...repo, loaded: true }
-  }
-  try {
-    const [history, pulls] = await Promise.all([
-      plan.node.defaultBranchRef?.target
-        ? fetchCommits(
-            commitPageLoader(transport, plan, since, selfLogins, signal)
-          )
-        : { commits: [], truncated: false },
-      plan.node.pullRequests?.totalCount === 0
-        ? []
-        : fetchPulls(transport, plan, since, selfLogins, signal),
-    ])
-    return {
-      ...repo,
-      commits: history.commits,
-      truncated: history.truncated,
-      pulls,
-      loaded: true,
-    }
-  } catch (error) {
-    if (signal?.aborted || isFatal(error)) {
-      throw error
-    }
-    return { ...repo, loaded: true, error: describe(error) }
-  }
+   if (repo.pushedAt < since) {
+      return { ...repo, loaded: true }
+   }
+   try {
+      const [history, pulls] = await Promise.all([
+         plan.node.defaultBranchRef?.target
+            ? fetchCommits(
+               commitPageLoader(transport, plan, since, selfLogins, signal)
+            )
+            : { commits: [], truncated: false },
+         plan.node.pullRequests?.totalCount === 0
+            ? []
+            : fetchPulls(transport, plan, since, selfLogins, signal),
+      ])
+      return {
+         ...repo,
+         commits: history.commits,
+         truncated: history.truncated,
+         pulls,
+         loaded: true,
+      }
+   } catch (error) {
+      if (signal?.aborted || isFatal(error)) {
+         throw error
+      }
+      return { ...repo, loaded: true, error: describe(error) }
+   }
 }
 
 function isFatal(error: unknown) {
-  return (
-    error instanceof GitHubError &&
-    (error.kind === "auth" || error.kind === "rate-limit")
-  )
+   return (
+      error instanceof GitHubError &&
+      (error.kind === 'auth' || error.kind === 'rate-limit')
+   )
 }
 
 function describe(error: unknown) {
-  if (error instanceof QueryTimeout) {
-    return "GitHub timed out computing this repository's history."
-  }
-  return error instanceof Error ? error.message : "Unknown error"
+   if (error instanceof QueryTimeout) {
+      return 'GitHub timed out computing this repository\'s history.'
+   }
+   return error instanceof Error ? error.message : 'Unknown error'
 }
 
 function commitPageLoader(
-  transport: GraphqlTransport,
-  plan: RepoPlan,
-  since: number,
-  selfLogins: string[],
-  signal?: AbortSignal
+   transport: GraphqlTransport,
+   plan: RepoPlan,
+   since: number,
+   selfLogins: string[],
+   signal?: AbortSignal
 ): CommitPageLoader {
-  const variables = {
-    owner: plan.ownerLogin,
-    name: plan.node.name,
-    since: new Date(since).toISOString(),
-    author: plan.authorId ? { id: plan.authorId } : null,
-  }
-  return async (after, first) => {
-    const data = (await transport(
-      COMMITS_QUERY,
-      { ...variables, first, after },
-      signal
-    )) as CommitsData
-    const history = data.repository?.defaultBranchRef?.target?.history
-    return history
-      ? {
-          commits: history.nodes.map((node) => toCommit(node, selfLogins)),
-          totalCount: history.totalCount,
-          pageInfo: history.pageInfo,
-        }
-      : null
-  }
+   const variables = {
+      owner: plan.ownerLogin,
+      name: plan.node.name,
+      since: new Date(since).toISOString(),
+      author: plan.authorId ? { id: plan.authorId } : null,
+   }
+   return async (after, first) => {
+      const data = (await transport(
+         COMMITS_QUERY,
+         { ...variables, first, after },
+         signal
+      )) as CommitsData
+      const history = data.repository?.defaultBranchRef?.target?.history
+      return history
+         ? {
+            commits: history.nodes.map((node) => toCommit(node, selfLogins)),
+            totalCount: history.totalCount,
+            pageInfo: history.pageInfo,
+         }
+         : null
+   }
 }
 
 function toCommit(node: CommitNode, selfLogins: string[]): CommitEvent {
-  const isMerge = node.parents.totalCount > 1
-  return {
-    at: Date.parse(node.committedDate),
-    additions: isMerge ? 0 : node.additions,
-    deletions: isMerge ? 0 : node.deletions,
-    actor: classifyActor(
-      { login: node.author?.user?.login ?? null, name: node.author?.name },
-      selfLogins
-    ),
-  }
+   const isMerge = node.parents.totalCount > 1
+   return {
+      at: Date.parse(node.committedDate),
+      additions: isMerge ? 0 : node.additions,
+      deletions: isMerge ? 0 : node.deletions,
+      actor: classifyActor(
+         { login: node.author?.user?.login ?? null, name: node.author?.name },
+         selfLogins
+      ),
+   }
 }
 
 async function fetchCommits(loadPage: CommitPageLoader) {
-  const commits: CommitEvent[] = []
-  let pageSize = INITIAL_COMMIT_PAGE
-  let after: string | null = null
+   const commits: CommitEvent[] = []
+   let pageSize = INITIAL_COMMIT_PAGE
+   let after: string | null = null
 
-  for (;;) {
-    let page: CommitPage | null
-    try {
-      page = await loadPage(after, pageSize)
-    } catch (error) {
-      if (error instanceof QueryTimeout && pageSize > MIN_COMMIT_PAGE) {
-        pageSize = Math.max(MIN_COMMIT_PAGE, Math.floor(pageSize / 2))
-        continue
+   for (;;) {
+      let page: CommitPage | null
+      try {
+         page = await loadPage(after, pageSize)
+      } catch (error) {
+         if (error instanceof QueryTimeout && pageSize > MIN_COMMIT_PAGE) {
+            pageSize = Math.max(MIN_COMMIT_PAGE, Math.floor(pageSize / 2))
+            continue
+         }
+         throw error
       }
-      throw error
-    }
-    if (!page) {
-      return { commits, truncated: false }
-    }
-    commits.push(...page.commits)
-    if (!page.pageInfo.hasNextPage) {
-      return { commits, truncated: false }
-    }
-    if (commits.length >= MAX_COMMITS_PER_REPO) {
-      return { commits, truncated: true }
-    }
+      if (!page) {
+         return { commits, truncated: false }
+      }
+      commits.push(...page.commits)
+      if (!page.pageInfo.hasNextPage) {
+         return { commits, truncated: false }
+      }
+      if (commits.length >= MAX_COMMITS_PER_REPO) {
+         return { commits, truncated: true }
+      }
 
-    const head = historyHead(page.pageInfo.endCursor, commits.length)
-    if (head) {
-      const end = Math.min(page.totalCount, MAX_COMMITS_PER_REPO)
-      const rest = await fetchCommitRanges(
-        loadPage,
-        head,
-        commits.length,
-        end,
-        pageSize
-      )
-      return { commits: commits.concat(rest), truncated: page.totalCount > end }
-    }
-    after = page.pageInfo.endCursor
-  }
+      const head = historyHead(page.pageInfo.endCursor, commits.length)
+      if (head) {
+         const end = Math.min(page.totalCount, MAX_COMMITS_PER_REPO)
+         const rest = await fetchCommitRanges(
+            loadPage,
+            head,
+            commits.length,
+            end,
+            pageSize
+         )
+         return { commits: commits.concat(rest), truncated: page.totalCount > end }
+      }
+      after = page.pageInfo.endCursor
+   }
 }
 
 function historyHead(cursor: string | null, fetched: number) {
-  const [, head, offset] = HISTORY_CURSOR.exec(cursor ?? "") ?? []
-  return Number(offset) === fetched - 1 ? head : null
+   const [, head, offset] = HISTORY_CURSOR.exec(cursor ?? '') ?? []
+   return Number(offset) === fetched - 1 ? head : null
 }
 
 async function fetchCommitRanges(
-  loadPage: CommitPageLoader,
-  head: string,
-  start: number,
-  end: number,
-  pageSize: number
+   loadPage: CommitPageLoader,
+   head: string,
+   start: number,
+   end: number,
+   pageSize: number
 ) {
-  const starts = Array.from(
-    { length: Math.ceil((end - start) / pageSize) },
-    (_, index) => start + index * pageSize
-  )
-  const ranges = await Promise.all(
-    starts.map((from) =>
-      fetchCommitRange(loadPage, head, from, Math.min(end, from + pageSize))
-    )
-  )
-  return ranges.flat()
+   const starts = Array.from(
+      { length: Math.ceil((end - start) / pageSize) },
+      (_, index) => start + index * pageSize
+   )
+   const ranges = await Promise.all(
+      starts.map((from) =>
+         fetchCommitRange(loadPage, head, from, Math.min(end, from + pageSize))
+      )
+   )
+   return ranges.flat()
 }
 
 async function fetchCommitRange(
-  loadPage: CommitPageLoader,
-  head: string,
-  start: number,
-  end: number
+   loadPage: CommitPageLoader,
+   head: string,
+   start: number,
+   end: number
 ): Promise<CommitEvent[]> {
-  try {
-    const page = await loadPage(`${head} ${start - 1}`, end - start)
-    return page?.commits ?? []
-  } catch (error) {
-    if (!(error instanceof QueryTimeout) || end - start <= MIN_COMMIT_PAGE) {
-      throw error
-    }
-    const middle = start + Math.ceil((end - start) / 2)
-    const halves = await Promise.all([
-      fetchCommitRange(loadPage, head, start, middle),
-      fetchCommitRange(loadPage, head, middle, end),
-    ])
-    return halves.flat()
-  }
+   try {
+      const page = await loadPage(`${head} ${start - 1}`, end - start)
+      return page?.commits ?? []
+   } catch (error) {
+      if (!(error instanceof QueryTimeout) || end - start <= MIN_COMMIT_PAGE) {
+         throw error
+      }
+      const middle = start + Math.ceil((end - start) / 2)
+      const halves = await Promise.all([
+         fetchCommitRange(loadPage, head, start, middle),
+         fetchCommitRange(loadPage, head, middle, end),
+      ])
+      return halves.flat()
+   }
 }
 
 async function fetchPulls(
-  transport: GraphqlTransport,
-  plan: RepoPlan,
-  since: number,
-  selfLogins: string[],
-  signal?: AbortSignal
+   transport: GraphqlTransport,
+   plan: RepoPlan,
+   since: number,
+   selfLogins: string[],
+   signal?: AbortSignal
 ) {
-  const pulls: PullEvent[] = []
-  let after: string | null = null
+   const pulls: PullEvent[] = []
+   let after: string | null = null
 
-  for (;;) {
-    const data = (await transport(
-      PULLS_QUERY,
-      { owner: plan.ownerLogin, name: plan.node.name, after },
-      signal
-    )) as PullsData
-    const page = data.repository?.pullRequests
-    if (!page) {
-      break
-    }
+   for (;;) {
+      const data = (await transport(
+         PULLS_QUERY,
+         { owner: plan.ownerLogin, name: plan.node.name, after },
+         signal
+      )) as PullsData
+      const page = data.repository?.pullRequests
+      if (!page) {
+         break
+      }
 
-    let reachedOlder = false
-    for (const node of page.nodes) {
-      if (Date.parse(node.updatedAt) < since) {
-        reachedOlder = true
-        break
+      let reachedOlder = false
+      for (const node of page.nodes) {
+         if (Date.parse(node.updatedAt) < since) {
+            reachedOlder = true
+            break
+         }
+         const pull: PullEvent = {
+            createdAt: Date.parse(node.createdAt),
+            mergedAt: node.mergedAt ? Date.parse(node.mergedAt) : null,
+            closedAt: node.closedAt ? Date.parse(node.closedAt) : null,
+            actor: classifyActor(
+               {
+                  login: node.author?.login ?? null,
+                  isBot: node.author?.__typename === 'Bot',
+               },
+               selfLogins
+            ),
+         }
+         if (pullTouches(pull, since)) {
+            pulls.push(pull)
+         }
       }
-      const pull: PullEvent = {
-        createdAt: Date.parse(node.createdAt),
-        mergedAt: node.mergedAt ? Date.parse(node.mergedAt) : null,
-        closedAt: node.closedAt ? Date.parse(node.closedAt) : null,
-        actor: classifyActor(
-          {
-            login: node.author?.login ?? null,
-            isBot: node.author?.__typename === "Bot",
-          },
-          selfLogins
-        ),
+      if (reachedOlder || !page.pageInfo.hasNextPage) {
+         break
       }
-      if (pullTouches(pull, since)) {
-        pulls.push(pull)
-      }
-    }
-    if (reachedOlder || !page.pageInfo.hasNextPage) {
-      break
-    }
-    after = page.pageInfo.endCursor
-  }
+      after = page.pageInfo.endCursor
+   }
 
-  return pulls
+   return pulls
 }
